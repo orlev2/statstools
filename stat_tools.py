@@ -468,5 +468,3 @@ def confidence_interval_ratio(avg_base, stdev_base, obs_base, avg_var, stdev_var
     if (avg_base < 0):
         fieller = [-x for x in fieller]
     return estimate, fieller[0], fieller[1]
-   
-        sta
