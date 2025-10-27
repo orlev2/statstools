@@ -4,9 +4,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import datetime
 import os
-from scipy.stats import chi2_contingency, chi2, ttest_ind_from_stats, norm, binom, mannwhitneyu, t
-import statsmodels.formula.api as smf
+from scipy.stats import chi2_contingency, chi2, ttest_ind_from_stats, norm, binom, mannwhitneyu, t, chisquare
 from statsmodels.stats.proportion import proportion_confint 
+import statsmodels.formula.api as smf
 # import pyspark.sql.functions as f
 
 import patsy
@@ -468,3 +468,26 @@ def confidence_interval_ratio(avg_base, stdev_base, obs_base, avg_var, stdev_var
     if (avg_base < 0):
         fieller = [-x for x in fieller]
     return estimate, fieller[0], fieller[1]
+
+
+def calculate_req_traffic_for_power(alpha, beta, base_rate, expected_effect):
+    za = norm.ppf(1 - alpha/2)
+    zb = norm.ppf(1 - beta)
+    mde = (base_rate * expected_effect) 
+    sigma = np.sqrt((base_rate) * (1-base_rate))
+    n_variant = 2 * (sigma**2) * (za + zb)**2 / (mde**2)
+    return int(n_variant)
+
+
+def calculate_mde_from_traffic(alpha, beta, base_rate, n_variant):
+    za = norm.ppf(1 - alpha/2)
+    zb = norm.ppf(1 - beta)
+    sigma = np.sqrt((base_rate) * (1-base_rate))    
+    mde = np.sqrt(2 * (sigma**2) * (za + zb)**2 / n_variant)
+    
+    print(
+        f'MDE (percentage effect) = {mde/base_rate:.2%}',
+        f'\nMDE (absolute effect) = {base_rate:.2%} +- {mde:.2%}',
+        f'\nEffect identifiable outside the range [{base_rate - mde:.2%},{base_rate + mde:.2%}]\n------'
+    )
+    return mde / BASE_RATE
