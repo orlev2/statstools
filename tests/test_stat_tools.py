@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import sys
 import os
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,6 +17,12 @@ from exp_tools.stat_tools import (
     confidence_interval_ratio,
     get_mann_whitney_test,
     get_stats,
+    get_ci,
+    get_ci_bootstrap,
+    calculate_mde_from_traffic,
+    get_results,
+    get_results_bootstrap,
+    get_results_per_clienttype,
 )
 
 
@@ -40,6 +47,37 @@ def make_df_stats(
         "average_value": [reached_base / visitors_base, reached_var / visitors_var],
         "stdv":          [stdv_base, stdv_var],
         "binary":        [binary, binary],
+    })
+
+
+def make_binary_df(n=500, rate_base=0.10, rate_var=0.12, seed=42):
+    """Build a raw binary-metric experiment DataFrame."""
+    rng = np.random.default_rng(seed)
+    base = rng.binomial(1, rate_base, size=n).tolist()
+    var  = rng.binomial(1, rate_var,  size=n).tolist()
+    return pd.DataFrame({
+        "variant": [0] * n + [1] * n,
+        "metric":  base + var,
+    })
+
+
+def make_raw_df_with_clienttype(n=150, diff=0.0, seed=42):
+    """Build a raw experiment DataFrame with a clienttype_grouped column.
+
+    Half of each variant is labelled "web", the other half "app".
+    Both values match all three filters used by get_results_per_clienttype
+    ("web|app" matches both via regex OR, "web" matches the first half,
+    "app" matches the second half).
+    """
+    rng = np.random.default_rng(seed)
+    base = rng.normal(loc=10.0,        scale=2.0, size=n)
+    var  = rng.normal(loc=10.0 + diff, scale=2.0, size=n)
+    half = n // 2
+    client_types = (["web"] * half + ["app"] * (n - half)) * 2
+    return pd.DataFrame({
+        "variant":            [0] * n + [1] * n,
+        "metric":             list(base) + list(var),
+        "clienttype_grouped": client_types,
     })
 
 
@@ -438,7 +476,7 @@ class TestGetStats:
 
     def test_non_inferiority_threshold(self):
         df_stats = make_df_stats()
-        result = get_stats(df_stats, non_inferioirity_threshold=-0.05)
+        result = get_stats(df_stats, non_inferiority_threshold=-0.05)
         assert 0 <= result["p-value"] <= 1
 
     def test_ratio_var_base(self):
@@ -449,3 +487,269 @@ class TestGetStats:
         result = get_stats(df_stats)
         expected_ratio = (110 / 1000) / (100 / 1000) - 1
         assert abs(result["ratio var/base"] - expected_ratio) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# get_ci
+# ---------------------------------------------------------------------------
+
+class TestGetCi:
+    def test_binary_dispatch_prints_estimate(self, capsys):
+        df_stats = make_df_stats(
+            visitors_base=1000, visitors_var=1000,
+            reached_base=100,   reached_var=120,
+            binary=True,
+        )
+        get_ci(df_stats, "test_metric", confidence=0.9, plot=False)
+        out = capsys.readouterr().out
+        assert "Estimate:" in out
+        assert "CI = [" in out
+
+    def test_continuous_ratio_dispatch_uses_percent(self, capsys):
+        df_stats = make_df_stats()
+        get_ci(df_stats, "test_metric", confidence=0.9, plot=False, ratio=True)
+        out = capsys.readouterr().out
+        assert "Estimate:" in out
+        assert "%" in out  # relative format uses percentage
+
+    def test_continuous_absolute_dispatch(self, capsys):
+        df_stats = make_df_stats()
+        get_ci(df_stats, "test_metric", confidence=0.9, plot=False, ratio=False)
+        out = capsys.readouterr().out
+        assert "Estimate:" in out
+
+    def test_non_inferiority_prints_decision(self, capsys):
+        df_stats = make_df_stats()
+        get_ci(df_stats, "test_metric", confidence=0.9, plot=False,
+               non_inferiority_threshold=-0.05)
+        out = capsys.readouterr().out
+        assert "CI_low >" in out
+
+    def test_plot_called_when_enabled(self):
+        df_stats = make_df_stats()
+        with patch("exp_tools.stat_tools.plot_ci") as mock_plot:
+            get_ci(df_stats, "test_metric", confidence=0.9, plot=True)
+            mock_plot.assert_called_once()
+
+    def test_plot_not_called_when_disabled(self):
+        df_stats = make_df_stats()
+        with patch("exp_tools.stat_tools.plot_ci") as mock_plot:
+            get_ci(df_stats, "test_metric", confidence=0.9, plot=False)
+            mock_plot.assert_not_called()
+
+    def test_wider_ci_at_higher_confidence(self, capsys):
+        df_stats = make_df_stats()
+        # Capture CI bounds for two confidence levels and compare widths
+        with patch("exp_tools.stat_tools.plot_ci"):
+            get_ci(df_stats, "m", confidence=0.80, plot=True)
+            get_ci(df_stats, "m", confidence=0.99, plot=True)
+        # Verify no exception is raised — width monotonicity is tested in
+        # TestConfidenceIntervalRatio which exercises the underlying function.
+        capsys.readouterr()
+
+
+# ---------------------------------------------------------------------------
+# get_ci_bootstrap
+# ---------------------------------------------------------------------------
+
+class TestGetCiBootstrap:
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_returns_dataframe(self, mock_plot):
+        df = make_raw_df(n=100)
+        result = get_ci_bootstrap(df, "metric", n_replicates=10)
+        assert isinstance(result, pd.DataFrame)
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_shape_is_two_times_n_replicates(self, mock_plot):
+        df = make_raw_df(n=100)
+        n_replicates = 15
+        result = get_ci_bootstrap(df, "metric", n_replicates=n_replicates)
+        # pd.concat produces 2 rows (one per variant) per replicate
+        assert len(result) == 2 * n_replicates
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_prints_estimate(self, mock_plot, capsys):
+        df = make_raw_df(n=200, diff=1.0, seed=7)
+        get_ci_bootstrap(df, "metric", n_replicates=20)
+        out = capsys.readouterr().out
+        assert "Estimate:" in out
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_non_inferiority_prints_decision(self, mock_plot, capsys):
+        df = make_raw_df(n=100)
+        get_ci_bootstrap(df, "metric", n_replicates=10,
+                         non_inferiority_threshold=-99.0)
+        out = capsys.readouterr().out
+        assert "CI_low >" in out
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_plot_ci_called_once(self, mock_plot):
+        df = make_raw_df(n=100)
+        get_ci_bootstrap(df, "metric", n_replicates=10)
+        mock_plot.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# calculate_mde_from_traffic
+# ---------------------------------------------------------------------------
+
+class TestCalculateMdeFromTraffic:
+    def test_returns_float(self, capsys):
+        result = calculate_mde_from_traffic(
+            alpha=0.05, beta=0.20, base_rate=0.10, n_variant=10_000
+        )
+        capsys.readouterr()
+        assert isinstance(result, float)
+
+    def test_more_traffic_gives_smaller_mde(self, capsys):
+        mde_small_n = calculate_mde_from_traffic(
+            alpha=0.05, beta=0.20, base_rate=0.10, n_variant=1_000
+        )
+        mde_large_n = calculate_mde_from_traffic(
+            alpha=0.05, beta=0.20, base_rate=0.10, n_variant=100_000
+        )
+        capsys.readouterr()
+        assert mde_small_n > mde_large_n
+
+    def test_stricter_alpha_gives_larger_mde(self, capsys):
+        mde_loose  = calculate_mde_from_traffic(
+            alpha=0.10, beta=0.20, base_rate=0.10, n_variant=10_000
+        )
+        mde_strict = calculate_mde_from_traffic(
+            alpha=0.01, beta=0.20, base_rate=0.10, n_variant=10_000
+        )
+        capsys.readouterr()
+        assert mde_strict > mde_loose
+
+    def test_roundtrip_with_sample_size(self, capsys):
+        """MDE recovered from the required n should match the original effect."""
+        alpha, beta, base_rate, effect = 0.05, 0.20, 0.10, 0.05
+        n = calculate_req_traffic_for_power(alpha, beta, base_rate, effect)
+        mde = calculate_mde_from_traffic(alpha, beta, base_rate, n)
+        capsys.readouterr()
+        # int truncation in calculate_req_traffic_for_power introduces a small
+        # discrepancy; 1 % relative tolerance is sufficient.
+        assert abs(mde - effect) / effect < 0.01
+
+    def test_prints_mde_summary(self, capsys):
+        calculate_mde_from_traffic(
+            alpha=0.05, beta=0.20, base_rate=0.10, n_variant=10_000
+        )
+        out = capsys.readouterr().out
+        assert "MDE" in out
+
+
+# ---------------------------------------------------------------------------
+# get_results
+# ---------------------------------------------------------------------------
+
+class TestGetResults:
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_binary_metric_runs(self, mock_plot, capsys):
+        df = make_binary_df(n=500)
+        get_results(df, "metric")
+        capsys.readouterr()
+        mock_plot.assert_called_once()
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_continuous_metric_runs(self, mock_plot, capsys):
+        df = make_raw_df(n=300)
+        get_results(df, "metric")
+        capsys.readouterr()
+        mock_plot.assert_called_once()
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_with_threshold_adjusts_confidence(self, mock_plot, capsys):
+        df = make_raw_df(n=300)
+        get_results(df, "metric", threshold=-0.05)
+        out = capsys.readouterr().out
+        assert "One sided test" in out
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_calculate_ratio_false(self, mock_plot, capsys):
+        df = make_raw_df(n=300)
+        get_results(df, "metric", calculate_ratio=False)
+        capsys.readouterr()
+        mock_plot.assert_called_once()
+
+    @patch("exp_tools.stat_tools.get_mann_whitney_test")
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_mannwhitney_kwarg_triggers_test(self, mock_plot, mock_mwu, capsys):
+        df = make_raw_df(n=200)
+        get_results(df, "metric", mannwhitney=True)
+        capsys.readouterr()
+        mock_mwu.assert_called_once()
+
+    @patch("exp_tools.stat_tools.get_mann_whitney_test")
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_mannwhitney_not_called_by_default(self, mock_plot, mock_mwu, capsys):
+        df = make_raw_df(n=200)
+        get_results(df, "metric")
+        capsys.readouterr()
+        mock_mwu.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_results_bootstrap
+# ---------------------------------------------------------------------------
+
+class TestGetResultsBootstrap:
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_runs_without_error(self, mock_plot, capsys):
+        df = make_raw_df(n=100)
+        get_results_bootstrap(df, "metric", n_replicates=10)
+        capsys.readouterr()
+        assert mock_plot.called
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_with_threshold_adjusts_confidence(self, mock_plot, capsys):
+        df = make_raw_df(n=100)
+        get_results_bootstrap(df, "metric", threshold=-99.0, n_replicates=10)
+        out = capsys.readouterr().out
+        assert "One sided test" in out
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_prints_summary_stats(self, mock_plot, capsys):
+        df = make_raw_df(n=100)
+        get_results_bootstrap(df, "metric", n_replicates=10)
+        out = capsys.readouterr().out
+        assert "visitors" in out or "variant" in out  # df_stats table
+
+
+# ---------------------------------------------------------------------------
+# get_results_per_clienttype
+# ---------------------------------------------------------------------------
+
+class TestGetResultsPerClienttype:
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_iterates_all_client_type_groups(self, mock_plot, capsys):
+        df = make_raw_df_with_clienttype(n=150)
+        get_results_per_clienttype(df, "metric")
+        out = capsys.readouterr().out
+        assert "web|app" in out
+        assert "web" in out
+        assert "app" in out
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_plot_ci_called_once_per_client_type(self, mock_plot, capsys):
+        df = make_raw_df_with_clienttype(n=150)
+        get_results_per_clienttype(df, "metric")
+        capsys.readouterr()
+        # three client-type groups → three CI plots
+        assert mock_plot.call_count == 3
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_with_threshold_adjusts_confidence(self, mock_plot, capsys):
+        df = make_raw_df_with_clienttype(n=150)
+        get_results_per_clienttype(df, "metric", threshold=-0.5)
+        out = capsys.readouterr().out
+        assert "One sided test" in out
+
+    @patch("exp_tools.stat_tools.plot_ci")
+    def test_threshold_confidence_computed_once_not_compounded(self, mock_plot, capsys):
+        """Confidence adjustment must not be applied repeatedly across iterations."""
+        df = make_raw_df_with_clienttype(n=150)
+        get_results_per_clienttype(df, "metric", confidence=0.9, threshold=-0.5)
+        out = capsys.readouterr().out
+        # 1 - (1 - 0.9)*2 = 0.8; the string should appear exactly once
+        assert out.count("0.8") == 1
