@@ -15,7 +15,9 @@ Two modes per metric type:
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+# Ensure the repo root (parent of this folder) is on the path so that
+# `exp_tools` can be imported regardless of where streamlit is invoked from.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import plotly.graph_objects as go
