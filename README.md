@@ -17,11 +17,12 @@ pip install -r requirements.txt
 
 An interactive Streamlit app for experiment sizing and MDE calculation, located in `power_analysis_ui/`.
 
+**Live app:** [statstools-power-analysis.streamlit.app](https://statstools-power-analysis.streamlit.app/) *(Streamlit Community Cloud)*
+
+Run locally:
 ```bash
 streamlit run power_analysis_ui/app.py
 ```
-
-Opens at **http://localhost:8501**
 
 **Supported metric types:**
 
