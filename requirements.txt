@@ -1,15 +1,18 @@
-matplotlib==3.9.4
-streamlit==1.50.0
-matplotlib-inline==0.2.1
+# Core dependencies
 numpy>=1.24,<2.0
 pandas>=2.0
-patsy>=0.5
-plotly>=5.0
 scipy>=1.10
-seaborn>=0.13
 statsmodels>=0.14
+plotly>=5.0
+patsy>=0.5
+matplotlib>=3.7
+seaborn>=0.13
 tqdm>=4.64
+
+# Streamlit UI
+streamlit>=1.30
 
 # Dev/test
 nbformat>=5.0
+matplotlib-inline>=0.1
 pytest>=8.0
