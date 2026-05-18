@@ -1,4 +1,0 @@
-# Dependencies for the Power Analysis UI (Streamlit app).
-# Install from the repo root so exp_tools is importable:
-#   pip install -r requirements.txt -r power_analysis_ui/requirements.txt
-streamlit==1.50.0

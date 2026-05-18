@@ -79,3 +79,8 @@ Thumbs.db
 *.jpg
 *.jpeg
 *.csv
+
+# Local tool configs
+.claude/
+.pytest_cache/
+iframe_figures/

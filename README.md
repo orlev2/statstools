@@ -9,28 +9,13 @@ Statistical tools for A/B experiment analysis — significance testing, confiden
 python -m venv .venv
 source .venv/bin/activate
 
-# Install core dependencies
+# Install all dependencies (including Streamlit for the UI)
 pip install -r requirements.txt
-
-# (Optional) Install UI dependencies
-pip install -r power_analysis_ui/requirements.txt
 ```
 
 ## Power Analysis UI
 
 An interactive Streamlit app for experiment sizing and MDE calculation, located in `power_analysis_ui/`.
-
-### Install
-
-```bash
-# Install core dependencies
-pip install -r requirements.txt
-
-# Install UI-specific dependency (Streamlit)
-pip install -r power_analysis_ui/requirements.txt
-```
-
-### Run
 
 ```bash
 streamlit run power_analysis_ui/app.py

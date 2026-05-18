@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install dependencies
+# Install all dependencies (including Streamlit)
 pip install -r requirements.txt
 
 # Run all tests
